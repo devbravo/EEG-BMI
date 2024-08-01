@@ -49,7 +49,7 @@ class TimeFeatureExtraction(FeatureExtractionStrategy):
         return statistical_features
   
 
-    def ers_erd_features(self, epoch, sfreq, ):
+    def ers_erd_features(self, epoch, sfreq):
         n_channels, n_samples = epoch.shape
         npgerseg = min(256, n_samples)
         freqs, psd = welch(epoch, sfreq, nperseg=npgerseg, axis=1)
@@ -58,14 +58,7 @@ class TimeFeatureExtraction(FeatureExtractionStrategy):
         for band_name, (fmin, fmax) in self.freq_bands.items():
             band_mask = (freqs >= fmin) & (freqs <= fmax)
             psd_band = psd[:, band_mask]
-            psd_band = np.array(psd_band)
-
-            if psd.ndim == 2:
-                avg_power = np.mean(psd_band, axis=1)  
-            elif psd.ndim == 3:
-                avg_power = np.mean(psd_band, axis=1)
-            else:
-                raise ValueError("Unsupported PSD shape")
+            avg_power = np.mean(psd_band, axis=1)  
             ers_erd_feats.append(avg_power)
       
         return np.concatenate(ers_erd_feats, axis=0)
@@ -95,14 +88,15 @@ class TimeFeatureExtraction(FeatureExtractionStrategy):
       
 
 class FrequencyFeatureExtraction(FeatureExtractionStrategy):
-    def __init__(self, methods):
+    def __init__(self, methods: List[str], freq_bands: Optional[Dict[str, tuple]] = None):
         self.methods = methods
+        self.freq_bands = freq_bands or {}
       
     def fft_features(self, epoch, sfreq):
         n_channels, n_samples = epoch.shape
         n_fft = min(1024, n_samples)
         
-        freqs = np.fft.rfftfreq(n_samples, d=1/sfreq)
+        freqs = np.fft.rfftfreq(n_fft, d=1/sfreq)
         fft_feats = np.zeros((n_channels, len(freqs)))
         
         for ch in range(n_channels):
@@ -118,13 +112,13 @@ class FrequencyFeatureExtraction(FeatureExtractionStrategy):
         
         freqs, psd = welch(epoch, sfreq, nperseg=npgerseg, axis=1)
         
-        delta_power = np.sum(psd[:, (freqs >= 0.5) & (freqs < 4)], axis=1, keepdims=True)
-        theta_power = np.sum(psd[:, (freqs >= 4) & (freqs < 8)], axis=1, keepdims=True)
-        alpha_power = np.sum(psd[:, (freqs >= 8) & (freqs < 13)], axis=1, keepdims=True)
-        beta_power = np.sum(psd[:, (freqs >= 13) & (freqs < 30)], axis=1, keepdims=True)
+        band_features = []
+        for band_name, (fmin, fmax) in self.freq_bands.items():
+            band_mask = (freqs >= fmin) & (freqs <= fmax)
+            band_power = np.sum(psd[:, band_mask], axis=1, keepdims=True)
+            band_features.append(band_power)
         
-        band_power_feats = np.concatenate([delta_power, theta_power, alpha_power, beta_power], axis=1)
-        return band_power_feats
+        return np.concatenate(band_features, axis=1)
       
     def extract_features(self, X, sfreq):
         frequency_domain_features = {'fft': [], 'power_band': []}
@@ -139,117 +133,126 @@ class FrequencyFeatureExtraction(FeatureExtractionStrategy):
         return frequency_domain_features
 
 class TimeFrequencyFeatureExtraction(FeatureExtractionStrategy):
-    def extract_stft_features(self, epoch, sfreq):      
-      f, t, Zxx = stft(epoch, sfreq, nperseg=128, noverlap=64)
-      stft_features = np.abs(Zxx).flatten()
-      return stft_features
-        
-    def extract_dwt_features(self, epoch):
-      coeffs = pywt.wavedec(epoch, 'db4', level=3)
-      dwt_feats = np.concatenate([coeff.flatten() for coeff in coeffs])   
-      return dwt_feats
+    def __init__(self, methods: List[str], freq_bands: Optional[Dict[str, tuple]] = None):
+      self.methods = methods
+      self.freq_bands = freq_bands or {}
+    
+    def stft_features(self, epoch, sfreq):
+      n_channels, n_samples = epoch.shape
+      stft_features = []
+      
+      for ch in range(n_channels):
+          f, t, Zxx = stft(epoch[ch, :], sfreq, nperseg=64, noverlap=32)
+          stft_features.append(np.abs(Zxx).flatten())
+      
+      return np.concatenate(stft_features)
+    
+    def dwt_features(self, epoch):
+      n_channels, n_samples = epoch.shape
+      dwt_features = []
+      
+      for ch in range(n_channels):
+          time_series = epoch[ch, :]
+          coeffs = pywt.wavedec(data=time_series, wavelet='db4', mode='periodization', level=3)
+          channel_dwt_features = np.concatenate([coeff.flatten() for coeff in coeffs])
+          dwt_features.append(channel_dwt_features)
+
+      return np.concatenate(dwt_features)
     
     def extract_features(self, X, sfreq):
-      time_frequency_domain_features = []
+      time_frequency_domain_features = {
+        'stft': [],
+        'dwt': []
+      }
+    
       for epoch in X:
-          stft_feats = self.extract_stft_features(epoch, sfreq)
-          dwt_feat = self.extract_dwt_features(epoch)
+          stft_feats = self.stft_features(epoch, sfreq)
+          dwt_feat = self.dwt_features(epoch)
 
-          time_frequency_features = np.concatenate([stft_feats, dwt_feat])
-          time_frequency_domain_features.append(time_frequency_features.flatten())
-      return np.array(time_frequency_domain_features)
+          time_frequency_domain_features['stft'].append(stft_feats)
+          time_frequency_domain_features['dwt'].append(dwt_feat)
+       
+      time_frequency_domain_features['stft'] = np.array(time_frequency_domain_features['stft'])
+      time_frequency_domain_features['dwt'] = np.array(time_frequency_domain_features['dwt'])
+      return time_frequency_domain_features
   
   
 class SpatialFeatureExtraction(FeatureExtractionStrategy):
-    def __init__(self, methods, sfreq, freq_bands: Optional[Dict[str, tuple]] = None, n_components: int = 4):
+    def __init__(self, methods: List[str], freq_bands: Optional[Dict[str, tuple]] = None, n_components: int = 4):
         # self.info = info
         self.methods = methods
-        self.sfreq = sfreq
         self.freq_bands = freq_bands
         self.n_components = n_components
-        self.subband_csp = SubBandCSP(self.sfreq, freq_bands, n_components)
 
-    def extract_features(self, X, y):
-      self.subband_csp.fit(X, y)
+    def extract_features(self, X, y, sfreq):
+      subband_csp = SubBandCSP(sfreq, self.freq_bands, self.n_components)
+      spatial_domain_features = {'sb_csp': []}
+      subband_csp.fit(X, y)
       
-      spatial_domain_features = []
       for epoch in X:
-        subBand_csp_feats = self.subband_csp.transform([epoch])[0]
+        subBand_csp_feats = subband_csp.transform([epoch])[0]
+        spatial_domain_features['sb_csp'].append(subBand_csp_feats.flatten())
         
-        spatial_domain_features.append(subBand_csp_feats.flatten())
-      return np.array(spatial_domain_features)
+      spatial_domain_features['sb_csp'] = np.array(spatial_domain_features['sb_csp'])
+      return spatial_domain_features
     
 
 class EEGFeatureExtractor:
-    def __init__(self,  methods: List[str], sfreq: str = None, freq_bands: Optional[Dict[str, tuple]] = None ):
-        # if frequencies is []:
-        #   self.frequencies = np.concatenate([
-        #     np.arange(1, 4, 0.5),   # Delta
-        #     np.arange(4, 8, 0.5),   # Theta
-        #     np.arange(8, 13, 0.5),  # Alpha
-        #     np.arange(13, 30, 1),   # Beta
-        #     np.arange(30, 50, 1)    # Gamma
-        # ])
-        # else:
-        #   self.frequencies = frequencies
-          
-        # self.n_cycles = self.frequencies / 2.0
-        # self.event_id = event_id
+    def __init__(self,  methods: List[str], freq_bands: Optional[Dict[str, tuple]] = None ):
         self.methods = methods
-        self.sfreq = sfreq  # in Hz
         self.freq_bands = freq_bands if freq_bands is not None else {
             'delta': (1, 4),
             'theta': (4, 8),
             'alpha': (8, 13),
             'beta': (13, 30),
+            'gamma': (30, 50)
         }
         
-        self.time_extractor = TimeFeatureExtraction(methods=self.methods, freq_bands=freq_bands)
-        self.frequency_extractor = FrequencyFeatureExtraction(methods=self.methods)
-        self.time_frequency_extractor = TimeFrequencyFeatureExtraction()
-        self.spatial_extractor = SpatialFeatureExtraction(methods=self.methods, sfreq=self.sfreq, freq_bands=self.freq_bands)
+        self.time_extractor = TimeFeatureExtraction(methods=self.methods, freq_bands=self.freq_bands)
+        self.frequency_extractor = FrequencyFeatureExtraction(methods=self.methods, freq_bands=self.freq_bands)
+        self.time_frequency_extractor = TimeFrequencyFeatureExtraction(methods=self.methods, freq_bands=self.freq_bands)
+        self.spatial_extractor = SpatialFeatureExtraction(methods=self.methods, freq_bands=self.freq_bands)
     
     def extract_time_features(self, X: Epochs, sfreq: float=None) -> np.ndarray:
         return self.time_extractor.extract_features(X, sfreq)
     
-    def extract_frequency_features(self, X, sfreq=None):
+    def extract_frequency_features(self, X: Epochs, sfreq: float=None):
         return self.frequency_extractor.extract_features(X, sfreq)
     
-    def extract_time_frequency_features(self, X, sfreq=None):
+    def extract_time_frequency_features(self, X: Epochs, sfreq: float=None):
         return self.time_frequency_extractor.extract_features(X, sfreq)
     
-    def extract_spatial_features(self, X, y, sfreq=None):
-        return self.spatial_extractor.extract_features(X, sfreq)
+    def extract_spatial_features(self, X: Epochs, y, sfreq: float=None):
+        return self.spatial_extractor.extract_features(X, y, sfreq)
       
       
       
 class SubBandCSP:
-    def __init__(self, sfreq, sub_band_ranges, n_components=4):
+    def __init__(self, sfreq, freq_bands, n_components=4):
         self.sfreq = sfreq
-        self.sub_band_ranges = sub_band_ranges
+        self.freq_bands = freq_bands
         self.n_components = n_components
-        self.csp_models = []
+        self.csp_models = {}
 
-    def bandpass_filter(self, data, low, high, sfreq, order=5):
-        nyquist = 0.5 * sfreq
+    def bandpass_filter(self, data, low, high, order=5):
+        nyquist = 0.5 * self.sfreq
         low = low / nyquist
         high = high / nyquist
         b, a = butter(order, [low, high], btype='band')
         return lfilter(b, a, data, axis=0)
 
     def fit(self, X, y):
-        for low, high in self.sub_band_ranges:
-            filtered_X = np.array([self.bandpass_filter(epoch, low, high, self.sfreq) for epoch in X])
-            csp = CSP(n_components=self.n_components, reg=None, log=True)
+        for band_name, (low, high) in self.freq_bands.items():
+            filtered_X = np.array([self.bandpass_filter(epoch, low, high) for epoch in X])
+            csp = CSP(n_components=self.n_components, reg=0.1, log=True)
             csp.fit(filtered_X, y)
-            
-            self.csp_models.append(csp)
+            self.csp_models[band_name] = csp
 
     def transform(self, X):
-        features = []
-        for csp, (low, high) in zip(self.csp_models, self.sub_band_ranges):
-            band_features = [csp.transform(self.bandpass_filter(epoch, low, high, self.sfreq).reshape(1, -1))[0] for epoch in X]
-            features.append(np.array(band_features))
-        features = np.concatenate(features, axis=1)
-        return features
+        transformed_X = []
+        for band_name, (low, high) in self.freq_bands.items():
+            csp = self.csp_models[band_name]
+            filtered_X = np.array([self.bandpass_filter(epoch, low, high) for epoch in X])
+            transformed_X.append(csp.transform(filtered_X))
+        return np.concatenate(transformed_X, axis=1)
       
