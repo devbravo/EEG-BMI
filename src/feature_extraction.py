@@ -47,7 +47,6 @@ class TimeFeatureExtraction(FeatureExtractionStrategy):
               feature = self.stats_methods[method](epoch)
               statistical_features[method] = feature
         return statistical_features
-  
 
     def ers_erd_features(self, epoch, sfreq):
         n_channels, n_samples = epoch.shape
@@ -64,27 +63,22 @@ class TimeFeatureExtraction(FeatureExtractionStrategy):
         return np.concatenate(ers_erd_feats, axis=0)
     
     def extract_features(self, X, sfreq=None):
-      time_domain_features = {
-          'statistical_features': {},
-          'ers_erd': []
-      }
-      statistical_features_list = {method: [] for method in self.methods}
+        time_domain_features = {method: [] for method in self.methods}
+        time_domain_features['ers_erd'] = []
 
-      for epoch in X:
-          stats_features = self.statistical_features(epoch)
-          ers_erd_feats = self.ers_erd_features(epoch, sfreq)
-          
-          for key, value in stats_features.items():
-              statistical_features_list[key].append(value)
+        for epoch in X:
+            stats_features = self.statistical_features(epoch)
+            ers_erd_feats = self.ers_erd_features(epoch, sfreq)
+            
+            for key, value in stats_features.items():
+                time_domain_features[key].append(value)
 
-          time_domain_features['ers_erd'].append(ers_erd_feats)
+            time_domain_features['ers_erd'].append(ers_erd_feats)
 
-      for key, feature_list in statistical_features_list.items():
-          time_domain_features['statistical_features'][key] = np.array(feature_list)
+        for key in time_domain_features:
+            time_domain_features[key] = np.array(time_domain_features[key])
 
-      time_domain_features['ers_erd'] = np.array(time_domain_features['ers_erd'])
-
-      return time_domain_features
+        return time_domain_features
       
 
 class FrequencyFeatureExtraction(FeatureExtractionStrategy):
