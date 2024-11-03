@@ -105,9 +105,9 @@ from joblib import Parallel, delayed
 from sklearn.base import MetaEstimatorMixin, clone
 from sklearn.metrics import get_scorer
 
-from utilities import _name_estimators
-from utilities import _BaseXComposition
-from utilities import _calc_score, _get_featurenames, _merge_lists, _preprocess      
+from src.utilities import _name_estimators
+from src.utilities import _BaseXComposition
+from src.utilities import _calc_score, _get_featurenames, _merge_lists, _preprocess      
       
       
 class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
