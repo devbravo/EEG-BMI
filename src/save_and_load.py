@@ -20,8 +20,10 @@ def extract_run_number(filename: str) -> int:
     """
     match = re.search(r'Run (\d+)', filename)
     return int(match.group(1)) if match else float('inf')
+  
 
-def load_eeg_data(baseOutputPath: str, participants: Union[str, List[str]] = 'all') -> Dict[str, List[Raw]]:
+def load_eeg_data(baseOutputPath: str, 
+                  participants: Union[str, List[str]] = 'all') -> Dict[str, List[Raw]]:
     """
     Loads all processed EEG runs from the base output path into a dictionary.
     
